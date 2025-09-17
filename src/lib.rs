@@ -1,15 +1,16 @@
 use anyhow::Result;
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::{fs::File, io::AsyncReadExt};
+use tokio::{fs::File, io::AsyncReadExt, net::TcpListener};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Country {
     id: u8,
-    #[serde(rename = "country_short_form_name")]
+    #[serde(alias = "country_short_form_name")]
     country: String,
     capital_city: String,
-    #[serde(rename = "country_code_2letter")]
+    #[serde(alias = "country_code_2letter")]
     country_code: String,
     capital_latitude: f32,
     capital_longitude: f32,
@@ -24,7 +25,7 @@ enum Predicate {
     Tag(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Dataset {
     by_id: HashMap<u8, Country>,
     all_items: Vec<Country>,
@@ -35,7 +36,7 @@ impl Dataset {
         self.by_id.get(&id)
     }
 
-    fn get_items_with_predicate(&self, predicate: Option<Predicate>) -> Vec<&Country> {
+    fn get_items_with_predicate(&self, predicate: Option<Predicate>) -> Vec<Country> {
         if let Some(p) = predicate {
             self.all_items
                 .iter()
@@ -50,9 +51,10 @@ impl Dataset {
                         x.country.to_lowercase().starts_with(&tag.to_lowercase())
                     }
                 })
+                .cloned()
                 .collect()
         } else {
-            self.all_items.iter().collect()
+            self.all_items.clone()
         }
     }
 }
@@ -78,9 +80,32 @@ async fn load_dataset() -> Result<Dataset> {
     Ok(dataset)
 }
 
+#[derive(Clone)]
+struct AppState {
+    db: Dataset,
+}
+
 pub async fn run() -> Result<()> {
-    load_dataset().await?;
+    let dataset = load_dataset().await?;
+    let state = AppState { db: dataset };
+
+    let tcp_listener = TcpListener::bind("127.0.0.1:4123").await?;
+    let router = Router::new()
+        .route("/", get(api_handler_root))
+        .route("/api/countries", get(api_handler_countries_list))
+        .with_state(state);
+
+    axum::serve(tcp_listener, router).await?;
     Ok(())
+}
+
+async fn api_handler_root() -> impl IntoResponse {
+    (StatusCode::OK, "Hello world")
+}
+
+async fn api_handler_countries_list(State(app_state): State<AppState>) -> impl IntoResponse {
+    let data = app_state.db.get_items_with_predicate(None);
+    (StatusCode::OK, Json(data))
 }
 
 #[cfg(test)]
