@@ -1,4 +1,5 @@
 use anyhow::Result;
+use axum::http::Method;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use tokio::{fs::File, io::AsyncReadExt, net::TcpListener};
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Country {
@@ -111,12 +113,17 @@ pub async fn run() -> Result<()> {
     let dataset = load_dataset().await?;
     let state = AppState { db: dataset };
 
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET])
+        .allow_origin(Any);
+
     let tcp_listener = TcpListener::bind("127.0.0.1:4123").await?;
     let router = Router::new()
         .route("/", get(api_handler_root))
         .route("/api/countries", get(api_handler_countries_list))
         .route("/api/countries/{id}", get(api_handler_countries_get))
-        .with_state(state);
+        .with_state(state)
+        .layer(cors);
 
     axum::serve(tcp_listener, router).await?;
     Ok(())
