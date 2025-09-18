@@ -1,6 +1,13 @@
 use anyhow::Result;
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use tokio::{fs::File, io::AsyncReadExt, net::TcpListener};
 
@@ -9,7 +16,7 @@ struct Country {
     id: u8,
     #[serde(alias = "country_short_form_name")]
     country: String,
-    capital_city: String,
+    capital: String,
     #[serde(alias = "country_code_2letter")]
     country_code: String,
     capital_latitude: f32,
@@ -32,11 +39,19 @@ struct Dataset {
 }
 
 impl Dataset {
-    fn get_by_id(&self, id: u8) -> Option<&Country> {
-        self.by_id.get(&id)
+    fn get_by_id(&self, id: u8) -> Option<Country> {
+        match self.by_id.get(&id) {
+            None => None,
+            Some(x) => Some(x.clone()),
+        }
     }
 
-    fn get_items_with_predicate(&self, predicate: Option<Predicate>) -> Vec<Country> {
+    fn get_items_with_predicate(
+        &self,
+        predicate: Option<Predicate>,
+        page: u32,
+        limit: u32,
+    ) -> Vec<Country> {
         if let Some(p) = predicate {
             self.all_items
                 .iter()
@@ -51,10 +66,17 @@ impl Dataset {
                         x.country.to_lowercase().starts_with(&tag.to_lowercase())
                     }
                 })
+                .skip((page * limit) as usize)
+                .take(limit as usize)
                 .cloned()
                 .collect()
         } else {
-            self.all_items.clone()
+            self.all_items
+                .iter()
+                .skip((page * limit) as usize)
+                .take(limit as usize)
+                .cloned()
+                .collect()
         }
     }
 }
@@ -93,6 +115,7 @@ pub async fn run() -> Result<()> {
     let router = Router::new()
         .route("/", get(api_handler_root))
         .route("/api/countries", get(api_handler_countries_list))
+        .route("/api/countries/{id}", get(api_handler_countries_get))
         .with_state(state);
 
     axum::serve(tcp_listener, router).await?;
@@ -103,8 +126,44 @@ async fn api_handler_root() -> impl IntoResponse {
     (StatusCode::OK, "Hello world")
 }
 
-async fn api_handler_countries_list(State(app_state): State<AppState>) -> impl IntoResponse {
-    let data = app_state.db.get_items_with_predicate(None);
+async fn api_handler_countries_get(
+    State(app_state): State<AppState>,
+    Path(id): Path<u8>,
+) -> impl IntoResponse {
+    match app_state.db.get_by_id(id) {
+        Some(x) => (StatusCode::OK, Json(json!(x))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"msg": "Country not found"})),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct QueryParams {
+    filter_tag: Option<String>,
+    filter_name: Option<String>,
+    filter_country_code: Option<String>,
+    page: Option<u32>,
+    items_per_page: Option<u32>,
+}
+
+async fn api_handler_countries_list(
+    State(app_state): State<AppState>,
+    Query(query): Query<QueryParams>,
+) -> impl IntoResponse {
+    let max = query.items_per_page.unwrap_or(10);
+    let page = query.page.unwrap_or(0);
+    let predicate = if let Some(p) = query.filter_country_code {
+        Some(Predicate::CountryCode(p))
+    } else if let Some(p) = query.filter_name {
+        Some(Predicate::Name(p))
+    } else if let Some(p) = query.filter_tag {
+        Some(Predicate::Tag(p))
+    } else {
+        None
+    };
+    let data = app_state.db.get_items_with_predicate(predicate, page, max);
     (StatusCode::OK, Json(data))
 }
 
@@ -136,17 +195,18 @@ mod test {
     #[tokio::test]
     async fn test_filter_by_predicate_none() {
         let d = load_dataset().await.unwrap();
-        let result = d.get_items_with_predicate(None);
+        let result = d.get_items_with_predicate(None, 0, 10);
         assert!(
-            result.len() == 6,
-            "We should have 6 items when no filtering is applied"
+            result.len() == 197,
+            "We should have 197 items when no filtering is applied"
         );
     }
 
     #[tokio::test]
     async fn test_filter_by_predicate_country_code() {
         let d = load_dataset().await.unwrap();
-        let result = d.get_items_with_predicate(Some(Predicate::CountryCode(String::from("AO"))));
+        let result =
+            d.get_items_with_predicate(Some(Predicate::CountryCode(String::from("AO"))), 0, 10);
         assert!(
             result.len() == 1,
             "We should have 1 item when filtered by country code"
@@ -161,7 +221,7 @@ mod test {
     #[tokio::test]
     async fn test_filter_by_predicate_name() {
         let d = load_dataset().await.unwrap();
-        let result = d.get_items_with_predicate(Some(Predicate::Name(String::from("an"))));
+        let result = d.get_items_with_predicate(Some(Predicate::Name(String::from("an"))), 0, 10);
         assert!(
             result.len() == 3,
             "We should have 3 item when filtered by name that matches several countries"
