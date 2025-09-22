@@ -34,6 +34,19 @@ enum Predicate {
     Tag(String),
 }
 
+#[derive(Serialize)]
+struct Pagination {
+    page: u32,
+    items_per_page: u32,
+    total_items: u32,
+}
+
+#[derive(Serialize)]
+struct CountryListResponse {
+    data: Vec<Country>,
+    pagination: Pagination,
+}
+
 #[derive(Debug, Clone)]
 struct Dataset {
     by_id: HashMap<u8, Country>,
@@ -53,9 +66,10 @@ impl Dataset {
         predicate: Option<Predicate>,
         page: u32,
         limit: u32,
-    ) -> Vec<Country> {
+    ) -> CountryListResponse {
         if let Some(p) = predicate {
-            self.all_items
+            let data = self
+                .all_items
                 .iter()
                 .filter(|&x| match p.clone() {
                     Predicate::CountryCode(code) => {
@@ -71,14 +85,33 @@ impl Dataset {
                 .skip((page * limit) as usize)
                 .take(limit as usize)
                 .cloned()
-                .collect()
+                .collect();
+
+            CountryListResponse {
+                data,
+                pagination: Pagination {
+                    page,
+                    items_per_page: limit,
+                    total_items: self.all_items.iter().count() as u32,
+                },
+            }
         } else {
-            self.all_items
+            let data = self
+                .all_items
                 .iter()
                 .skip((page * limit) as usize)
                 .take(limit as usize)
                 .cloned()
-                .collect()
+                .collect();
+
+            CountryListResponse {
+                data,
+                pagination: Pagination {
+                    page,
+                    items_per_page: limit,
+                    total_items: self.all_items.iter().count() as u32,
+                },
+            }
         }
     }
 }
