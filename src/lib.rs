@@ -237,7 +237,7 @@ mod test {
         let d = load_dataset().await.unwrap();
         let result = d.get_items_with_predicate(None, 0, 10);
         assert!(
-            result.len() == 197,
+            result.data.len() == 197,
             "We should have 197 items when no filtering is applied"
         );
     }
@@ -248,14 +248,16 @@ mod test {
         let result =
             d.get_items_with_predicate(Some(Predicate::CountryCode(String::from("AO"))), 0, 10);
         assert!(
-            result.len() == 1,
+            result.data.len() == 1,
             "We should have 1 item when filtered by country code"
         );
 
         assert!(
-            result[0].country_code == "AO",
+            result.data[0].country_code == "AO",
             "The filtered country should have same country code"
         );
+
+        assert!(result.pagination.page == 0);
     }
 
     #[tokio::test]
@@ -263,12 +265,12 @@ mod test {
         let d = load_dataset().await.unwrap();
         let result = d.get_items_with_predicate(Some(Predicate::Name(String::from("an"))), 0, 10);
         assert!(
-            result.len() == 3,
+            result.data.len() == 3,
             "We should have 3 item when filtered by name that matches several countries"
         );
 
         assert!(
-            result[0].country.starts_with("An"),
+            result.data[0].country.starts_with("An"),
             "The filtered country should have start with the filter string"
         );
     }
